@@ -9,6 +9,7 @@
     html,body { height:100%; }
     #map { height: 60vh; min-height: 420px; }
     .small { font-size: 0.85rem; color: #555; }
+    .error { color: red; font-weight: 600; }
   </style>
 </head>
 <body class="bg-gray-50 text-gray-800">
@@ -26,7 +27,7 @@
         <div>
           <label class="font-semibold">📂 Upload CSV nhân viên</label>
           <input id="csvFile" type="file" accept=".csv" class="w-full mt-2"/>
-          <div class="small mt-1">CSV format: id,code,name,phone,lat,lng,vehicle (hoặc có address thay lat/lng).</div>
+          <div class="small mt-1">CSV format: id,code,name,phone,lat,lng,vehicle.</div>
           <button id="downloadSample" class="mt-2 bg-gray-800 text-white px-3 py-2 rounded">Tải sample CSV</button>
         </div>
 
@@ -132,7 +133,6 @@
       if(emp.lat && emp.lng){
         const m = L.marker([emp.lat, emp.lng], {icon: empIcon}).addTo(map);
         m.bindPopup(`<b>${emp.name}</b><br>${emp.code}`);
-        m.empId = emp.id;
         markers.push(m);
       }
     });
@@ -141,14 +141,7 @@
     renderResults();
   }
 
-  // Geocode + Directions
-  async function geocodeORS(addr, key){
-    const url = `https://api.openrouteservice.org/geocode/search?api_key=${key}&text=${encodeURIComponent(addr)}&size=1`;
-    const resp = await fetch(url); const d = await resp.json();
-    if(!d.features.length) throw new Error("Không tìm thấy địa chỉ");
-    const c = d.features[0].geometry.coordinates; return [c[1],c[0]];
-  }
-
+  // ORS
   async function directionsORS(start, end, key){
     const url = `https://api.openrouteservice.org/v2/directions/driving-car?api_key=${key}&start=${start[1]},${start[0]}&end=${end[1]},${end[0]}`;
     const resp = await fetch(url); const d = await resp.json();
@@ -162,13 +155,13 @@
     q('caInput').value = e.latlng.lat.toFixed(6)+","+e.latlng.lng.toFixed(6);
   });
 
-  q('setCaBtn').addEventListener('click', async ()=>{
-    const v = q('caInput').value.trim(); const key = q('orsKey').value.trim();
+  q('setCaBtn').addEventListener('click', ()=>{
+    const v = q('caInput').value.trim();
     if(!v) return;
     if(v.includes(',')){
       const [lat,lng] = v.split(',').map(x=>parseFloat(x.trim()));
-      if(validLatLng(lat) && !isNaN(lng)) setCa([lat,lng]); else if(key) setCa(await geocodeORS(v,key));
-    } else if(key) setCa(await geocodeORS(v,key));
+      if(validLatLng(lat) && !isNaN(lng)) setCa([lat,lng]);
+    }
   });
 
   q('clearCaBtn').addEventListener('click', ()=>{
@@ -182,14 +175,15 @@
     map.setView(latlng,14);
   }
 
-  // Tính
+  // Tính khoảng cách
   async function computeEmp(emp){
-    if(!caMarker) return alert("Chưa đặt Ca");
-    const key = q('orsKey').value.trim(); if(!key) return alert("Nhập ORS key");
+    if(!caMarker) return false;
+    const key = q('orsKey').value.trim(); if(!key) return false;
     const ca = [caMarker.getLatLng().lat, caMarker.getLatLng().lng];
     const d = await directionsORS([emp.lat,emp.lng], ca, key);
     emp.dist_km=d.dist; emp.dur_min=d.dur; emp.route=d.coords;
     renderResults();
+    return true;
   }
 
   // Show route
@@ -224,10 +218,20 @@
   window.calcEmp=id=>{const e=employees.find(x=>x.id==id);if(e) computeEmp(e);};
   window.showEmp=id=>{const e=employees.find(x=>x.id==id);if(e&&e.route) showRoute(e);};
 
+  // Tính tất cả
   q('computeAll').addEventListener('click', async ()=>{
-    for(let i=0;i<employees.length;i++){ await computeEmp(employees[i]); await sleep(300); }
+    if(!caMarker){ progressEl.innerHTML='<span class="error">⚠ Chưa đặt điểm Ca!</span>'; return; }
+    const key = q('orsKey').value.trim(); if(!key){ progressEl.innerHTML='<span class="error">⚠ Nhập ORS API key!</span>'; return; }
+
+    for(let i=0;i<employees.length;i++){
+      progressEl.textContent = `Đang tính ${i+1}/${employees.length}...`;
+      await computeEmp(employees[i]);
+      await sleep(400); // delay để tránh giới hạn API
+    }
+    progressEl.textContent = "✅ Hoàn tất";
   });
 
+  // Xuất CSV
   q('exportCsv').addEventListener('click', ()=>{
     const rows=["id,code,name,phone,vehicle,lat,lng,distance_km,duration_min"];
     employees.forEach(e=>rows.push([e.id,e.code,e.name,e.phone,e.vehicle,e.lat,e.lng,e.dist_km||"",e.dur_min||""].join(",")));
